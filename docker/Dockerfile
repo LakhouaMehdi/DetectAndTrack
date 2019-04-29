@@ -51,6 +51,9 @@ RUN pip install --no-cache-dir --upgrade pip==9.0.3 setuptools wheel && \
 
 ########## INSTALLATION STEPS ###################
 RUN git clone --branch master --recursive https://github.com/pytorch/pytorch.git
+
+RUN pip install typing
+
 RUN cd pytorch && mkdir build && cd build \
     && cmake .. \
     -DCUDA_ARCH_NAME=Manual \
