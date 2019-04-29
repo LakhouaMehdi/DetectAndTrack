@@ -58,6 +58,7 @@ def parse_args():
         sys.exit(1)
     return parser.parse_args()
 
+
 def _read_video(args):
     vidcap = cv2.VideoCapture(args.video_path)
     success,image = vidcap.read()
@@ -73,10 +74,12 @@ def _read_video(args):
         count += 1
     return count-1
 
+
 def _read_video_frames(out_path, vid_name, index):
     im = cv2.imread(osp.join(out_path,vid_name + '_frames','%08d.jpg'%(index+1)))
     assert im is not None
     return im
+
 
 def _read_video_3frames(out_path, vid_name, index):
     ims = []
@@ -87,11 +90,13 @@ def _read_video_3frames(out_path, vid_name, index):
     ret = np.concatenate(ims, axis=0)
     return ret
 
+
 def _id_or_index(ix, val):
     if len(val) == 0:
         return val
     else:
         return val[ix]
+
 
 def _vis_single_frame(im, cls_boxes_i, cls_segms_i, cls_keyps_i, cls_tracks_i, thresh):
     res = vis_utils.vis_one_image_opencv(
@@ -121,6 +126,7 @@ def _generate_visualizations(entry, ix, all_boxes, all_keyps, all_tracks, thresh
     pred = _vis_single_frame(
         im.copy(), cls_boxes_i, None, cls_keyps_i, cls_tracks_i, thresh)
     return pred
+
 
 def _prune_bad_detections(dets, conf):
     """
@@ -164,48 +170,6 @@ def _compute_distance_matrix(
     return np.sum(np.stack(all_Cs, axis=0), axis=0)
 
 
-def _compute_tracks_video_lstm(frames, dets, lstm_model):
-    nframes = len(frames)
-    video_tracks = []
-    next_track_id = FIRST_TRACK_ID
-    # track_lstms contain track_id: <lstm_hidden_layer>
-    track_lstms = {}
-    for frame_id in range(nframes):
-        frame_tracks = []
-        # each element is (roidb entry, idx in the dets/original roidb)
-        cur_boxes = dets['all_boxes'][1][frame_id]
-        cur_poses = dets['all_keyps'][1][frame_id]
-        cur_boxposes = lstm_track_utils.encode_box_poses(cur_boxes, cur_poses)
-        # Compute LSTM next matches
-        # Need to keep prev_track_ids to make sure of ordering of output
-        prev_track_ids = video_tracks[frame_id - 1] if frame_id > 1 else []
-        match_scores = lstm_track_utils.compute_matching_scores(
-            track_lstms, prev_track_ids, cur_boxposes, lstm_model)
-        if match_scores.size > 0:
-            matches = _compute_matches(
-                None, None, None, None, None, None, None, None,
-                cfg.TRACKING.BIPARTITE_MATCHING_ALGO, C=(-match_scores))
-        else:
-            matches = -np.ones((cur_boxes.shape[0],))
-        prev_tracks = video_tracks[frame_id - 1] if frame_id > 0 else None
-        for m in matches:
-            if m == -1:  # didn't match to any
-                frame_tracks.append(next_track_id)
-                next_track_id += 1
-                if next_track_id >= MAX_TRACK_IDS:
-                    logger.warning('Exceeded max track ids ({})'.format(
-                        MAX_TRACK_IDS))
-                    next_track_id %= MAX_TRACK_IDS
-            else:
-                frame_tracks.append(prev_tracks[m])
-        # based on the matches, update the lstm hidden weights
-        # Whatever don't get matched, start a new track ID. Whatever previous
-        # track IDs don't get matched, have to be deleted.
-        lstm_track_utils.update_lstms(
-            track_lstms, prev_track_ids, frame_tracks, cur_boxposes, lstm_model)
-        video_tracks.append(frame_tracks)
-    return video_tracks
-
 def _compute_tracks_video(frames, dets):
     nframes = len(frames)
     video_tracks = []
@@ -241,14 +205,12 @@ def _compute_tracks_video(frames, dets):
         video_tracks.append(frame_tracks)
     return video_tracks
 
-def compute_matches_tracks(frames, dets, lstm_model):
+
+def compute_matches_tracks(frames, dets):
     # Consider all consecutive frames, and match the boxes
     num_images = len(frames)
     all_tracks = [[]] * num_images
-    if cfg.TRACKING.LSTM_TEST.LSTM_TRACKING_ON:
-        tracks = _compute_tracks_video_lstm(frames, dets, lstm_model)
-    else:
-        tracks = _compute_tracks_video(frames, dets)
+    tracks = _compute_tracks_video(frames, dets)
     if cfg.TRACKING.FLOW_SMOOTHING_ON:
         tracks = _smooth_pose_video(
                 frames, dets, tracks)
@@ -257,6 +219,7 @@ def compute_matches_tracks(frames, dets, lstm_model):
         all_tracks[i] = tracks[i]
     dets['all_tracks'] = [[], all_tracks]
     return dets
+
 
 def main(name_scope, gpu_dev, num_images, args):
 
@@ -320,7 +283,6 @@ def main(name_scope, gpu_dev, num_images, args):
                     tmp_keyps_i0[1][idx] = tmp_keyps_i0[1][idx][:, :17]
                 extend_results(i, all_keyps, tmp_keyps_i0)
 
-
     cfg_yaml = yaml.dump(cfg)
 
     det_name = args.vid_name + '_detections.pkl'
@@ -348,21 +310,14 @@ def main(name_scope, gpu_dev, num_images, args):
 
     conf = cfg.TRACKING.CONF_FILTER_INITIAL_DETS
     dets = _prune_bad_detections(dets, conf)
-    if cfg.TRACKING.LSTM_TEST.LSTM_TRACKING_ON:
-        # Needs torch, only importing if we need to run LSTM tracking
-        from lstm.lstm_track import lstm_track_utils
-        lstm_model = lstm_track_utils.init_lstm_model(
-            cfg.TRACKING.LSTM_TEST.LSTM_WEIGHTS)
-        lstm_model.cuda()
-    else:
-        lstm_model = None
 
-    dets_withTracks = compute_matches_tracks(frames, dets, lstm_model)
+    dets_withTracks = compute_matches_tracks(frames, dets)
     _write_det_file(dets_withTracks, out_detrack_file)
 
     for i in range(num_images):
         vis_im = _generate_visualizations(frames[i], i, dets['all_boxes'], dets['all_keyps'], dets['all_tracks'])
         cv2.imwrite(osp.join(args.out_path, args.vid_name + '_vis','%08d.jpg'%(i+1)),vis_im)
+
 
 if __name__=='__main__':
     workspace.GlobalInit(['caffe2', '--caffe2_log_level=0'])
@@ -371,9 +326,9 @@ if __name__=='__main__':
         args.out_path = args.video_path
     args.vid_name = args.video_path.split('/')[-1].split('.')[0]
 
-    utils.c2.import_custom_ops()
-    utils.c2.import_detectron_ops()
-    utils.c2.import_contrib_ops()
+    # utils.c2.import_custom_ops()
+    # utils.c2.import_detectron_ops()
+    # utils.c2.import_contrib_ops()
 
     if args.cfg_file is not None:
         cfg_from_file(args.cfg_file)
@@ -386,6 +341,6 @@ if __name__=='__main__':
     os.makedirs(osp.join(args.out_path,args.vid_name+ '_vis'))
 
     num_images = _read_video(args)
-    gpu_dev = core.DeviceOption(caffe2_pb2.CUDA, cfg.ROOT_GPU_ID)
-    name_scope = 'gpu_{}'.format(cfg.ROOT_GPU_ID)
-    main(name_scope, gpu_dev, num_images, args)
+    # gpu_dev = core.DeviceOption(caffe2_pb2.CUDA, cfg.ROOT_GPU_ID)
+    # name_scope = 'gpu_{}'.format(cfg.ROOT_GPU_ID)
+    # main(name_scope, gpu_dev, num_images, args)
